@@ -13,6 +13,8 @@ use rand::{rngs::SmallRng, seq::SliceRandom, RngCore, SeedableRng};
 #[command(about = "Build contributor and origin collaboration graphs")]
 struct Args {
     n: usize,
+    #[arg(short = 'j', long)]
+    threads: Option<usize>,
 }
 
 fn main() {
@@ -20,6 +22,7 @@ fn main() {
     let mut r = SmallRng::seed_from_u64(0);
 
     let n = args.n;
+    let threads = args.threads;
 
     let mut keys = Vec::with_capacity(n);
     keys.resize_with(n, || r.next_u64());
@@ -36,7 +39,18 @@ fn main() {
         let _: _ = black_box(*unsafe { map.get(&keys[i]).unwrap_unchecked() });
     }
     println!(
-        "GxHM             lookup time {:8.3}ns",
+        "GxHM             lookup time {:6.1}ns",
+        now.elapsed().as_nanos() as f64 / n as f64
+    );
+
+    let now = Instant::now();
+    index_threads(&keys, threads, |keys| {
+        for key in keys {
+            let _: _ = black_box(*unsafe { map.get(key).unwrap_unchecked() });
+        }
+    });
+    println!(
+        "GxHM 6t          lookup time {:6.1}ns",
         now.elapsed().as_nanos() as f64 / n as f64
     );
 
@@ -57,14 +71,33 @@ fn main() {
         _ = black_box(values[ptr_hash.index(&keys[i])]);
     }
     println!(
-        "PtrHash          lookup time {:8.3}ns",
+        "PtrHash          lookup time {:6.1}ns",
+        now.elapsed().as_nanos() as f64 / n as f64
+    );
+    let now = Instant::now();
+    index_threads(&keys, threads, |keys| {
+        for key in keys {
+            debug_assert_eq!(values[ptr_hash.index(key)], *map.get(key).unwrap());
+            _ = black_box(values[ptr_hash.index(key)]);
+        }
+    });
+    println!(
+        "PtrHash 6t       lookup time {:6.1}ns",
         now.elapsed().as_nanos() as f64 / n as f64
     );
 
     let now = Instant::now();
     index_all_with_prefetch(&values, keys.iter().map(|key| ptr_hash.index(key)));
     println!(
-        "PtrHash +pf vals lookup time {:8.3}ns",
+        "PtrHash +pf vals lookup time {:6.1}ns",
+        now.elapsed().as_nanos() as f64 / n as f64
+    );
+    let now = Instant::now();
+    index_threads(&keys, threads, |keys| {
+        index_all_with_prefetch(&values, keys.iter().map(|key| ptr_hash.index(key)));
+    });
+    println!(
+        "PtrHash +pf vals 6t lookup time {:6.1}ns",
         now.elapsed().as_nanos() as f64 / n as f64
     );
 
@@ -74,14 +107,35 @@ fn main() {
         _ = black_box(values[idx]);
     });
     println!(
-        "PtrHash +pf idx  lookup time {:8.3}ns",
+        "PtrHash +pf idx  lookup time {:6.1}ns",
+        now.elapsed().as_nanos() as f64 / n as f64
+    );
+
+    let now = Instant::now();
+    index_threads(&keys, threads, |keys| {
+        let indices = ptr_hash.index_stream::<32, true, _>(keys);
+        indices.for_each(|idx| {
+            _ = black_box(values[idx]);
+        });
+    });
+    println!(
+        "PtrHash +pf idx 6t lookup time {:6.1}ns",
         now.elapsed().as_nanos() as f64 / n as f64
     );
 
     let now = Instant::now();
     index_all_with_prefetch(&values, ptr_hash.index_stream::<32, true, _>(&keys));
     println!(
-        "PtrHash +pf both lookup time {:8.3}ns",
+        "PtrHash +pf both lookup time {:6.1}ns",
+        now.elapsed().as_nanos() as f64 / n as f64
+    );
+
+    let now = Instant::now();
+    index_threads(&keys, threads, |keys| {
+        index_all_with_prefetch(&values, ptr_hash.index_stream::<32, true, _>(keys));
+    });
+    println!(
+        "PtrHash +pf both 6t lookup time {:6.1}ns",
         now.elapsed().as_nanos() as f64 / n as f64
     );
 
@@ -105,14 +159,34 @@ fn main() {
         _ = black_box(values[phast.get(&keys[i])]);
     }
     println!(
-        "Phast            lookup time {:8.3}ns",
+        "Phast            lookup time {:6.1}ns",
+        now.elapsed().as_nanos() as f64 / n as f64
+    );
+    let now = Instant::now();
+    index_threads(&keys, threads, |keys| {
+        for key in keys {
+            debug_assert_eq!(values[phast.get(key) as usize], *map.get(key).unwrap());
+            _ = black_box(values[phast.get(key)]);
+        }
+    });
+    println!(
+        "Phast 6t         lookup time {:6.1}ns",
         now.elapsed().as_nanos() as f64 / n as f64
     );
 
     let now = Instant::now();
     index_all_with_prefetch(&values, keys.iter().map(|key| phast.get(key)));
     println!(
-        "Phast +pf vals   lookup time {:8.3}ns",
+        "Phast +pf vals   lookup time {:6.1}ns",
+        now.elapsed().as_nanos() as f64 / n as f64
+    );
+
+    let now = Instant::now();
+    index_threads(&keys, threads, |keys| {
+        index_all_with_prefetch(&values, keys.iter().map(|key| phast.get(key)));
+    });
+    println!(
+        "Phast +pf val 6t lookup time {:6.1}ns",
         now.elapsed().as_nanos() as f64 / n as f64
     );
 
@@ -132,7 +206,18 @@ fn main() {
         _ = black_box(vfunc.get(&keys[i]));
     }
     println!(
-        "VFunc            lookup time {:8.3}ns",
+        "VFunc            lookup time {:6.1}ns",
+        now.elapsed().as_nanos() as f64 / n as f64
+    );
+    let now = Instant::now();
+    index_threads(&keys, threads, |keys| {
+        for key in keys {
+            debug_assert_eq!(vfunc.get(key), *map.get(&key).unwrap());
+            _ = black_box(vfunc.get(key));
+        }
+    });
+    println!(
+        "VFunc 6t         lookup time {:6.1}ns",
         now.elapsed().as_nanos() as f64 / n as f64
     );
 }
@@ -146,6 +231,21 @@ fn index_all_with_prefetch(values: &[u64], indices: impl IntoIterator<Item = usi
         buf[i % 32] = idx;
         prefetch_index(&values, idx);
         i += 1;
+    });
+}
+
+fn index_threads(keys: &[u64], threads: Option<usize>, f: impl Fn(&[u64]) + Sync) {
+    let Some(threads) = threads else {
+        return;
+    };
+
+    let chunk_size = keys.len() / threads;
+    std::thread::scope(|s| {
+        for keys in keys.chunks(chunk_size) {
+            s.spawn(|| {
+                f(keys);
+            });
+        }
     });
 }
 
